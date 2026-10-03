@@ -174,7 +174,7 @@ Add this server block to your `mcp_config.json`:
     "classroom": {
       "command": "node",
       "args": [
-        "F:\\Aaradhya-Dev-Tamrakar\\google-classroom-mcp\\index.mjs"
+        "F:\\Aaradhya-Dev-Tamrakar\\Utility-MCPs\\google-classroom-mcp\\index.mjs"
       ],
       "env": {
         "CLASSROOM_CREDENTIALS_PATH": "C:\\Users\\Aaradhya\\.classroom-server-credentials.json",
@@ -184,6 +184,16 @@ Add this server block to your `mcp_config.json`:
   }
 }
 ```
+
+> **Note on Path Integrity**: If legacy tools look for `F:\Aaradhya-Dev-Tamrakar\google-classroom-mcp`, maintain a Windows NTFS directory junction:
+> ```powershell
+> New-Item -ItemType Junction -Path "F:\Aaradhya-Dev-Tamrakar\google-classroom-mcp" -Target "F:\Aaradhya-Dev-Tamrakar\Utility-MCPs\google-classroom-mcp"
+> ```
+
+### Dual OAuth Scope Boundary (`INV-AUTH-001`)
+* `.classroom-server-credentials.json` grants scopes strictly for Google Classroom REST API (`https://www.googleapis.com/auth/classroom.*`).
+* If an agent needs to stream or download binary files attached to coursework (e.g. PDFs or archives via `https://www.googleapis.com/drive/v3/files/{id}?alt=media`), it must use the credentials from the companion `gdrive-mcp` server (`.gdrive-server-credentials.json`) which carry full Google Drive API scopes. Calling the Drive media download endpoint with Classroom-only tokens triggers HTTP 403 `ACCESS_TOKEN_SCOPE_INSUFFICIENT`.
+
 
 ---
 
