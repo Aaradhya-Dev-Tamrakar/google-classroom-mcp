@@ -3,7 +3,7 @@ name: google-classroom
 description: >-
   Expert Google Classroom assistant for querying active courses, tracking upcoming assignments
   and due dates, analyzing coursework descriptions and attachments, checking submission grades
-  and late flags, reading stream announcements, and managing student turn-ins via the classroom MCP server.
+  and late flags, reading stream announcements, copying course contents, and managing student turn-ins via the classroom MCP server.
 ---
 
 # Google Classroom Agent Skill
@@ -20,6 +20,7 @@ Activate this skill whenever the user:
 - Asks for details, instructions, or materials for a specific assignment (e.g. *"What do I need to do for Assignment 3?"*, *"Show the rubric for the MLOps project"*).
 - Asks to check their grades, feedback, or submission status (e.g. *"Did I turn in the NLP quiz?"*, *"What was my score on the CV assignment?"*).
 - Asks for class stream announcements, teacher updates, or lecture materials.
+- Wants to copy published topics, coursework, class materials, announcements, and supported attachments between courses.
 - Wants to turn in or reclaim a submission.
 
 ---
@@ -87,3 +88,13 @@ When asked about grades or performance:
 - **Zero Redundant Listing**: If the course ID (e.g. `849624491859` for *"AI Fellowship 2026"*) has already been established in conversation, jump straight to `list_coursework` or `list_submissions` without repeating `list_courses`.
 - **Chronological Sorting**: Always format due dates cleanly in ISO format (`YYYY-MM-DD HH:mm`) and sort upcoming tasks by deadline earliest-first.
 - **Drive Cross-Linking**: Google Classroom assignments store files in Google Drive. When combined with the `gdrive` MCP server, agents can read source readings or auto-draft submissions in Google Drive and submit them to Classroom seamlessly.
+
+## Copying Course Contents
+
+Use `copy_course_contents` from the Classroom MCP when the user asks to duplicate course materials into a course they control. It copies published topics, coursework, class materials, announcements, supported rubrics, and Drive attachments. It does not copy rosters, submissions, grades, or course settings.
+
+1. Preview with `sourceCourseId`, `destinationCourseId`, and `driveFolderId`; `dryRun` defaults to `true`. Summarize planned counts, attachment destinations, expired due dates, and destination student count.
+2. Apply only when requested, with `dryRun: false`. The tool stops if the destination is not active or has enrolled students; keep that safety check in place.
+3. For expired coursework, `pastDueDatePolicy: "omit"` copies the assignment without its due date. Use it only when requested and report the omitted dates.
+4. Drive uses separate OAuth credentials from Classroom. The copy tool deduplicates attachments and keeps a local resume ledger. Report item-level failures; do not publish a post when a required attachment failed.
+5. Treat Drive `403` or `404` responses as retrieval/permission failures. A `404` alone does not establish whether a file was deleted or is inaccessible; report the source item and exact error, and ask the user to check the file and sharing access.
