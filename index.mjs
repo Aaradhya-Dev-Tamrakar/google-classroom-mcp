@@ -121,6 +121,7 @@ const TOOLS = [
         destinationCourseId: { type: "string", description: "Destination course ID; must currently have no students to apply a copy." },
         driveFolderId: { type: "string", description: "Drive parent folder ID for copied attachments." },
         dryRun: { type: "boolean", description: "Preview only (default true). Set false to make Drive and Classroom changes." },
+        pastDueDatePolicy: { type: "string", enum: ["skip", "omit"], description: "For coursework with dates already in the past: skip it (default) or copy it without the expired due date." },
       },
       required: ["sourceCourseId", "destinationCourseId", "driveFolderId"],
     },

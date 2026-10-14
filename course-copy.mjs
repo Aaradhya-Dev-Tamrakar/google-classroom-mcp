@@ -84,12 +84,14 @@ export function createCourseCopier({ classroomFetch, driveFetch = globalThis.fet
     } while (pageToken);
     return items;
   }
-  return async function copyCourseContents({ sourceCourseId, destinationCourseId, driveFolderId, dryRun = true }) {
+  return async function copyCourseContents({ sourceCourseId, destinationCourseId, driveFolderId, dryRun = true, pastDueDatePolicy = "skip" }) {
     if (!sourceCourseId || !destinationCourseId || !driveFolderId) throw new Error("sourceCourseId, destinationCourseId, and driveFolderId are required.");
     if (sourceCourseId === destinationCourseId) throw new Error("Source and destination course IDs must differ.");
+    if (!["skip", "omit"].includes(pastDueDatePolicy)) throw new Error("pastDueDatePolicy must be 'skip' or 'omit'.");
     const copyKey = `${sourceCourseId}:${destinationCourseId}:${driveFolderId}`;
     ledger.copies[copyKey] ||= { topics: {}, posts: {}, files: {}, folders: {} };
     const state = ledger.copies[copyKey];
+    state.failures ||= {};
     const [sourceCourse, destCourse, students, topics, coursework, materials, announcements] = await Promise.all([
       classroom("GET", `/courses/${sourceCourseId}`), classroom("GET", `/courses/${destinationCourseId}`),
       all(`/courses/${destinationCourseId}/students`, "students"),
@@ -102,6 +104,7 @@ export function createCourseCopier({ classroomFetch, driveFetch = globalThis.fet
     const published = [...coursework, ...materials, ...announcements];
     const usedTopicIds = new Set(published.map((item) => item.topicId).filter(Boolean));
     const relevantTopics = topics.filter((topic) => usedTopicIds.has(topic.topicId));
+    const pastDueItems = coursework.filter((item) => isPastDue(item.dueDate));
     const driveIds = new Set();
     for (const item of published) for (const material of item.materials || []) if (material.driveFile?.driveFile?.id) driveIds.add(material.driveFile.driveFile.id);
     const folders = new Map([["root", driveFolderId]]);
@@ -119,11 +122,15 @@ export function createCourseCopier({ classroomFetch, driveFetch = globalThis.fet
       destinationStudents: students.length, counts: { topics: relevantTopics.length, coursework: coursework.length, materials: materials.length, announcements: announcements.length, uniqueDriveFiles: driveIds.size },
       files: plannedFiles.map((x) => ({ ...x, destinationFolderId: folders.get(x.folder) || (x.folder === "root" ? driveFolderId : "will be created") })),
       rubricCount: coursework.filter((x) => x.rubrics?.length).length,
+      pastDueCoursework: pastDueItems.map((item) => ({ sourceId: item.id, title: item.title, dueDate: item.dueDate })),
       warning: folderResponse._error || undefined,
       note: students.length ? "Destination currently has students; published copies will be visible to them." : "Destination currently has no students.",
     };
     if (students.length) throw new Error(`Destination has ${students.length} student(s). Copy stopped before changes; remove students or confirm a destination with no students.`);
-    const failures = [];
+    const noteFailure = (key, failure) => {
+      state.failures[key] = failure;
+      checkpoint();
+    };
     async function ensureFolder(name) {
       if (name === "root") return driveFolderId;
       if (folders.has(name)) return folders.get(name);
@@ -136,7 +143,7 @@ export function createCourseCopier({ classroomFetch, driveFetch = globalThis.fet
       const key = `topic:${item.topicId || item.name}`;
       if (state.topics[key]) continue;
       try { const created = await classroom("POST", `/courses/${destinationCourseId}/topics`, { name: item.name }); state.topics[key] = created.topicId; checkpoint(); }
-      catch (e) { failures.push({ kind: "topic", title: item.name, error: e.message }); }
+      catch (e) { noteFailure(`topic:${item.topicId || item.name}`, { kind: "topic", title: item.name, error: e.message }); }
     }
     for (const id of driveIds) {
       if (state.files[id]) continue;
@@ -154,13 +161,19 @@ export function createCourseCopier({ classroomFetch, driveFetch = globalThis.fet
         const file = existing.files?.[0] || await drive("POST", `/files/${encodeURIComponent(id)}/copy`, {
           name, parents: [parent], appProperties: { classroomCopyKey: marker },
         });
-        state.files[id] = file.id; checkpoint();
-      } catch (e) { failures.push({ kind: "driveFile", sourceFileId: id, name, error: e.message }); }
+        state.files[id] = file.id; delete state.failures[`driveFile:${id}`]; checkpoint();
+      } catch (e) { noteFailure(`driveFile:${id}`, { kind: "driveFile", sourceFileId: id, name, error: e.message }); }
     }
     const createPost = async (kind, item) => {
       const key = `${kind}:${item.id}`;
       if (state.posts[key]) return;
-      const attachments = (item.materials || []).map((m) => {
+      const expiredDueDate = kind === "coursework" && isPastDue(item.dueDate);
+      if (expiredDueDate && pastDueDatePolicy === "skip") {
+        noteFailure(key, { kind, title: item.title, sourceId: item.id, dueDate: item.dueDate, error: "Source due date is in the past; set pastDueDatePolicy to 'omit' to copy without the due date." });
+        return;
+      }
+      const sourceMaterials = deduplicateMaterials(item.materials || []);
+      const attachments = sourceMaterials.map((m) => {
         if (m.driveFile?.driveFile?.id) {
           const newId = state.files[m.driveFile.driveFile.id];
           return newId ? { driveFile: { driveFile: { id: newId }, shareMode: m.driveFile.shareMode } } : null;
@@ -169,16 +182,17 @@ export function createCourseCopier({ classroomFetch, driveFetch = globalThis.fet
         if (m.link) return { link: m.link };
         return null;
       });
-      const missing = (item.materials || []).length - attachments.filter(Boolean).length;
-      if (missing) { failures.push({ kind, title: item.title || item.text, sourceId: item.id, error: `${missing} unsupported or failed attachment(s); post left unpublished.` }); return; }
+      const missing = sourceMaterials.length - attachments.filter(Boolean).length;
+      if (missing) { noteFailure(`${kind}:${item.id}`, { kind, title: item.title || item.text, sourceId: item.id, error: `${missing} unsupported or failed attachment(s); post left unpublished.` }); return; }
       const mappedTopic = item.topicId ? state.topics[`topic:${item.topicId}`] : undefined;
       if (item.topicId && !mappedTopic) {
-        failures.push({ kind, title: item.title || item.text, sourceId: item.id, error: "Topic could not be mapped; post left unpublished." });
+        noteFailure(`${kind}:${item.id}`, { kind, title: item.title || item.text, sourceId: item.id, error: "Topic could not be mapped; post left unpublished." });
         return;
       }
       let payload = { state: "PUBLISHED", materials: attachments };
       if (kind === "coursework") {
         payload = { ...payload, title: item.title, description: item.description, workType: item.workType, maxPoints: item.maxPoints, dueDate: item.dueDate, dueTime: item.dueTime, scheduledTime: item.scheduledTime, topicId: mappedTopic, submissionModificationMode: item.submissionModificationMode, multipleChoiceQuestion: item.multipleChoiceQuestion, assigneeMode: "ALL_STUDENTS" };
+        if (expiredDueDate) { delete payload.dueDate; delete payload.dueTime; }
         for (const field of ["title", "description", "workType", "maxPoints", "dueDate", "dueTime", "scheduledTime", "topicId", "submissionModificationMode", "multipleChoiceQuestion"]) if (payload[field] === undefined) delete payload[field];
       } else if (kind === "material") {
         payload = { ...payload, title: item.title, description: item.description, topicId: mappedTopic };
@@ -187,17 +201,18 @@ export function createCourseCopier({ classroomFetch, driveFetch = globalThis.fet
       const suffix = kind === "coursework" ? "courseWork" : kind === "material" ? "courseWorkMaterials" : "announcements";
       try {
         const created = await classroom("POST", `/courses/${destinationCourseId}/${suffix}`, payload);
-        state.posts[key] = created.id; checkpoint();
-      } catch (e) { failures.push({ kind, title: item.title || item.text, sourceId: item.id, error: e.message }); }
+        if (expiredDueDate) (state.omittedDueDates ||= {})[key] = item.dueDate;
+        state.posts[key] = created.id; delete state.failures[key]; checkpoint();
+      } catch (e) { noteFailure(key, { kind, title: item.title || item.text, sourceId: item.id, error: e.message }); }
       if (item.rubrics?.length && kind === "coursework" && state.posts[key]) {
         state.rubrics[key] ||= 0;
         for (let rubricIndex = state.rubrics[key]; rubricIndex < item.rubrics.length; rubricIndex++) {
           try {
             const rubric = item.rubrics[rubricIndex];
             await classroom("POST", `/courses/${destinationCourseId}/courseWork/${state.posts[key]}/rubrics`, { criteria: rubric.criteria, points: rubric.points, levels: rubric.levels });
-            state.rubrics[key] = rubricIndex + 1; checkpoint();
+            state.rubrics[key] = rubricIndex + 1; delete state.failures[`rubric:${key}:${rubricIndex}`]; checkpoint();
           } catch (e) {
-            failures.push({ kind: "rubric", title: item.title, sourceId: item.id, unsupported: true, error: e.message });
+            noteFailure(`rubric:${key}:${rubricIndex}`, { kind: "rubric", title: item.title, sourceId: item.id, unsupported: true, error: e.message });
             break;
           }
         }
@@ -206,7 +221,14 @@ export function createCourseCopier({ classroomFetch, driveFetch = globalThis.fet
     for (const item of coursework) await createPost("coursework", item);
     for (const item of materials) await createPost("material", item);
     for (const item of announcements) await createPost("announcement", item);
-    return { dryRun: false, counts: { topics: Object.keys(state.topics).length, coursework: coursework.length, materials: materials.length, announcements: announcements.length, uniqueDriveFiles: Object.keys(state.files).length }, failures, resumeLedger: ledgerPath };
+    const copiedByKind = { coursework: 0, materials: 0, announcements: 0 };
+    for (const key of Object.keys(state.posts)) {
+      const kind = key.split(":", 1)[0];
+      if (kind === "coursework") copiedByKind.coursework++;
+      if (kind === "material") copiedByKind.materials++;
+      if (kind === "announcement") copiedByKind.announcements++;
+    }
+    return { dryRun: false, counts: { topics: Object.keys(state.topics).length, ...copiedByKind, uniqueDriveFiles: Object.keys(state.files).length }, omittedDueDates: Object.entries(state.omittedDueDates || {}).map(([sourcePost, dueDate]) => ({ sourcePost, dueDate })), failures: Object.values(state.failures), resumeLedger: ledgerPath };
   };
 }
 
@@ -216,4 +238,24 @@ function targetFolderName(items, driveId, topics = []) {
   const text = `${owner?.title || ""} ${owner?.description || ""} ${owner?.text || ""} ${topic?.name || ""}`;
   const match = text.match(/\b(?:week|wk)\s*0*(\d+)\b|\bW\s*0*(\d+)\b/i);
   return match ? `[WK${Number(match[1] || match[2])}]` : "root";
+}
+
+function deduplicateMaterials(materials) {
+  const seen = new Set();
+  return materials.filter((material) => {
+    const content = material.driveFile?.driveFile?.id ? `drive:${material.driveFile.driveFile.id}`
+      : material.youtubeVideo?.id ? `youtube:${material.youtubeVideo.id}`
+        : material.link?.url ? `link:${material.link.url}` : JSON.stringify(material);
+    if (seen.has(content)) return false;
+    seen.add(content);
+    return true;
+  });
+}
+
+function isPastDue(dueDate) {
+  if (!dueDate?.year || !dueDate?.month || !dueDate?.day) return false;
+  const dueDay = Date.UTC(dueDate.year, dueDate.month - 1, dueDate.day);
+  const now = new Date();
+  const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+  return dueDay < today;
 }

@@ -9,7 +9,7 @@ const sourceId = "src";
 const destinationId = "dst";
 const folderId = "parent";
 
-function setup(t, { failFile = false, permissionDenied = false, studentCount = 0 } = {}) {
+function setup(t, { failFile = false, permissionDenied = false, studentCount = 0, duplicateMaterials = false, pastDue = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "classroom-copy-test-"));
   const tokenPath = path.join(dir, "drive-token.json");
   const oauthPath = path.join(dir, "drive-oauth.json");
@@ -18,11 +18,14 @@ function setup(t, { failFile = false, permissionDenied = false, studentCount = 0
   fs.writeFileSync(oauthPath, JSON.stringify({ installed: { client_id: "id", client_secret: "secret" } }));
   process.env.DRIVE_CREDENTIALS_PATH = tokenPath;
   process.env.DRIVE_OAUTH_PATH = oauthPath;
-  const counts = { fileCopies: 0, folderCreates: 0, postCreates: 0, topicCreates: 0 };
+  const counts = { fileCopies: 0, folderCreates: 0, postCreates: 0, topicCreates: 0, createdPayloads: [] };
   const sourcePost = {
     id: "cw1", title: "Week 1: Lab", description: "Do it", state: "PUBLISHED", workType: "ASSIGNMENT",
-    maxPoints: 10, dueDate: { year: 2026, month: 10, day: 20 }, topicId: "topic1",
-    materials: [{ driveFile: { driveFile: { id: "file1" }, shareMode: "STUDENT_COPY" } }],
+    maxPoints: 10, dueDate: pastDue ? { year: 2020, month: 1, day: 1 } : { year: 2026, month: 10, day: 20 }, topicId: "topic1",
+    materials: [
+      { driveFile: { driveFile: { id: "file1" }, shareMode: "STUDENT_COPY" } },
+      ...(duplicateMaterials ? [{ driveFile: { driveFile: { id: "file1" }, shareMode: "STUDENT_COPY" } }] : []),
+    ],
   };
   const classroomFetch = async (url, options = {}) => {
     const route = new URL(url).pathname.replace("/v1", "");
@@ -30,7 +33,11 @@ function setup(t, { failFile = false, permissionDenied = false, studentCount = 0
     if (options.body) body = JSON.parse(options.body);
     if (options.method === "POST") {
       if (route.endsWith("/topics")) { counts.topicCreates++; return Response.json({ topicId: "dest-topic" }); }
-      if (route.endsWith("/courseWork")) { counts.postCreates++; return Response.json({ id: "dest-cw" }); }
+      if (route.endsWith("/courseWork")) {
+        const ids = body.materials.map((item) => item.driveFile?.driveFile?.id || item.youtubeVideo?.id || item.link?.url);
+        if (new Set(ids).size !== ids.length) return Response.json({ error: "Duplicate materials are not allowed." }, { status: 400 });
+        counts.postCreates++; counts.createdPayloads.push(body); return Response.json({ id: "dest-cw" });
+      }
     }
     if (route === `/courses/${sourceId}`) return Response.json({ id: sourceId, name: "Source", courseState: "ACTIVE" });
     if (route === `/courses/${destinationId}`) return Response.json({ id: destinationId, name: "Destination", courseState: "ACTIVE" });
@@ -111,4 +118,24 @@ test("apply stops before writes when destination has enrolled students", async (
   await assert.rejects(copy({ sourceCourseId: sourceId, destinationCourseId: destinationId, driveFolderId: folderId, dryRun: false }), /has 2 student/);
   assert.equal(counts.fileCopies, 0);
   assert.equal(counts.postCreates, 0);
+});
+
+test("duplicate source attachments are deduplicated before creating coursework", async (t) => {
+  const { copy, counts } = setup(t, { duplicateMaterials: true });
+  const result = await copy({ sourceCourseId: sourceId, destinationCourseId: destinationId, driveFolderId: folderId, dryRun: false });
+  assert.equal(counts.postCreates, 1);
+  assert.equal(result.failures.length, 0);
+});
+
+test("past-due coursework is skipped by default and can be copied without expired dates", async (t) => {
+  const skipped = setup(t, { pastDue: true });
+  const skipResult = await skipped.copy({ sourceCourseId: sourceId, destinationCourseId: destinationId, driveFolderId: folderId, dryRun: false });
+  assert.equal(skipped.counts.postCreates, 0);
+  assert.match(skipResult.failures[0].error, /pastDueDatePolicy/);
+
+  const omitted = setup(t, { pastDue: true });
+  const omitResult = await omitted.copy({ sourceCourseId: sourceId, destinationCourseId: destinationId, driveFolderId: folderId, dryRun: false, pastDueDatePolicy: "omit" });
+  assert.equal(omitted.counts.postCreates, 1);
+  assert.equal("dueDate" in omitted.counts.createdPayloads[0], false);
+  assert.equal(omitResult.omittedDueDates.length, 1);
 });
