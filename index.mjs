@@ -6,6 +6,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import fs from "fs";
 import path from "path";
+import { createCourseCopier } from "./course-copy.mjs";
 
 const credentialsPath =
   process.env.CLASSROOM_CREDENTIALS_PATH ||
@@ -110,6 +111,20 @@ async function classroomFetch(endpoint, options = {}) {
 }
 
 const TOOLS = [
+  {
+    name: "copy_course_contents",
+    description: "Copy published topics, coursework, class materials, announcements, rubrics when supported, and Drive attachments between courses. Dry-run defaults to true. Applying requires Drive credential paths configured separately from Classroom credentials.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        sourceCourseId: { type: "string", description: "Source course ID." },
+        destinationCourseId: { type: "string", description: "Destination course ID; must currently have no students to apply a copy." },
+        driveFolderId: { type: "string", description: "Drive parent folder ID for copied attachments." },
+        dryRun: { type: "boolean", description: "Preview only (default true). Set false to make Drive and Classroom changes." },
+      },
+      required: ["sourceCourseId", "destinationCourseId", "driveFolderId"],
+    },
+  },
   {
     name: "list_courses",
     description: "List courses where the user is a student or teacher (e.g. active or archived classes).",
@@ -287,6 +302,8 @@ const TOOLS = [
   },
 ];
 
+const copyCourseContents = createCourseCopier({ classroomFetch });
+
 const server = new Server(
   {
     name: "classroom-mcp",
@@ -307,6 +324,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args = {} } = request.params;
 
   try {
+    if (name === "copy_course_contents") {
+      const result = await copyCourseContents(args);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], isError: false };
+    }
     if (name === "list_courses") {
       const params = new URLSearchParams();
       const states = args.courseStates || ["ACTIVE"];

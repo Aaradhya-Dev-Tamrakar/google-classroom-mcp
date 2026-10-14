@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node index.mjs",
     "auth": "node auth.mjs",
-    "sync": "node sync-schemas.mjs"
+    "sync": "node sync-schemas.mjs",
+    "test": "node --test"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0"
