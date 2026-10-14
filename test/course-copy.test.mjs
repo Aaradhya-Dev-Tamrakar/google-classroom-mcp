@@ -9,7 +9,7 @@ const sourceId = "src";
 const destinationId = "dst";
 const folderId = "parent";
 
-function setup(t, { failFile = false, permissionDenied = false, studentCount = 0, duplicateMaterials = false, pastDue = false } = {}) {
+function setup(t, { failFile = false, permissionDenied = false, studentCount = 0, duplicateMaterials = false, pastDue = false, specialMaterials } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "classroom-copy-test-"));
   const tokenPath = path.join(dir, "drive-token.json");
   const oauthPath = path.join(dir, "drive-oauth.json");
@@ -18,11 +18,11 @@ function setup(t, { failFile = false, permissionDenied = false, studentCount = 0
   fs.writeFileSync(oauthPath, JSON.stringify({ installed: { client_id: "id", client_secret: "secret" } }));
   process.env.DRIVE_CREDENTIALS_PATH = tokenPath;
   process.env.DRIVE_OAUTH_PATH = oauthPath;
-  const counts = { fileCopies: 0, folderCreates: 0, postCreates: 0, topicCreates: 0, createdPayloads: [] };
+  const counts = { fileCopies: 0, folderCreates: 0, postCreates: 0, topicCreates: 0, createdPayloads: [], driveRequests: [] };
   const sourcePost = {
     id: "cw1", title: "Week 1: Lab", description: "Do it", state: "PUBLISHED", workType: "ASSIGNMENT",
     maxPoints: 10, dueDate: pastDue ? { year: 2020, month: 1, day: 1 } : { year: 2026, month: 10, day: 20 }, topicId: "topic1",
-    materials: [
+    materials: specialMaterials || [
       { driveFile: { driveFile: { id: "file1" }, shareMode: "STUDENT_COPY" } },
       ...(duplicateMaterials ? [{ driveFile: { driveFile: { id: "file1" }, shareMode: "STUDENT_COPY" } }] : []),
     ],
@@ -50,6 +50,7 @@ function setup(t, { failFile = false, permissionDenied = false, studentCount = 0
   };
   const driveFetch = async (url, options = {}) => {
     const parsed = new URL(url);
+    counts.driveRequests.push(parsed.searchParams.get("supportsAllDrives"));
     const route = parsed.pathname.replace("/drive/v3", "");
     if (route === "/files" && options.method !== "POST") {
       const query = parsed.searchParams.get("q") || "";
@@ -95,6 +96,8 @@ test("retry uses the local ledger and does not duplicate copied files or posts",
   assert.equal(counts.postCreates, 1);
   assert.equal(counts.topicCreates, 1);
   assert.equal(counts.folderCreates, 0);
+  assert.ok(counts.driveRequests.length > 0);
+  assert.ok(counts.driveRequests.every((value) => value === "true"));
 });
 
 test("missing source attachment is reported and its post is not created", async (t) => {
@@ -125,6 +128,21 @@ test("duplicate source attachments are deduplicated before creating coursework",
   const result = await copy({ sourceCourseId: sourceId, destinationCourseId: destinationId, driveFolderId: folderId, dryRun: false });
   assert.equal(counts.postCreates, 1);
   assert.equal(result.failures.length, 0);
+});
+
+test("read-only Forms, Gemini Gems, and NotebookLM materials are copied as links", async (t) => {
+  const cases = [
+    { material: { form: { formUrl: "https://forms.google.test/form", title: "Quiz" } }, expected: { url: "https://forms.google.test/form", title: "Quiz" } },
+    { material: { gem: { url: "https://gemini.google.test/gem", title: "Mentor Gem" } }, expected: { url: "https://gemini.google.test/gem", title: "Mentor Gem" } },
+    { material: { notebook: { url: "https://notebooklm.google.test/notebook", title: "Course Notebook" } }, expected: { url: "https://notebooklm.google.test/notebook", title: "Course Notebook" } },
+  ];
+  for (const { material, expected } of cases) {
+    const { copy, counts } = setup(t, { specialMaterials: [material] });
+    const result = await copy({ sourceCourseId: sourceId, destinationCourseId: destinationId, driveFolderId: folderId, dryRun: false });
+    assert.equal(counts.postCreates, 1);
+    assert.deepEqual(counts.createdPayloads[0].materials, [{ link: expected }]);
+    assert.equal(result.failures.length, 0);
+  }
 });
 
 test("past-due coursework is skipped by default and can be copied without expired dates", async (t) => {

@@ -63,7 +63,7 @@ export function createCourseCopier({ classroomFetch, driveFetch = globalThis.fet
   }
   async function drive(method, route, body, params = {}) {
     const token = await driveToken();
-    const query = new URLSearchParams({ fields: "id,name,mimeType,parents,webViewLink", ...params });
+    const query = new URLSearchParams({ supportsAllDrives: "true", fields: "id,name,mimeType,parents,webViewLink", ...params });
     const response = await driveFetch(`${DRIVE_API}${route}?${query}`, {
       method, headers: { Authorization: `Bearer ${token}`, ...(body ? { "Content-Type": "application/json" } : {}) },
       ...(body ? { body: JSON.stringify(body) } : {}),
@@ -180,6 +180,9 @@ export function createCourseCopier({ classroomFetch, driveFetch = globalThis.fet
         }
         if (m.youtubeVideo) return { youtubeVideo: m.youtubeVideo };
         if (m.link) return { link: m.link };
+        if (m.form?.formUrl) return { link: { url: m.form.formUrl, title: m.form.title || "Google Form" } };
+        if (m.gem?.url) return { link: { url: m.gem.url, title: m.gem.title || "Gemini Gem" } };
+        if (m.notebook?.url) return { link: { url: m.notebook.url, title: m.notebook.title || "NotebookLM Notebook" } };
         return null;
       });
       const missing = sourceMaterials.length - attachments.filter(Boolean).length;
