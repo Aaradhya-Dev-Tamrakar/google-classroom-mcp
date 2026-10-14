@@ -231,6 +231,9 @@ This repository follows the centralized ecosystem Git and secret governance stan
 
 # Safe pull only:
 .\sync.ps1 -PullOnly
+
+# Push the current clean feature branch to its matching origin branch:
+.\sync.bat -PushCurrentBranch
 ```
 
 ### Safety Features
