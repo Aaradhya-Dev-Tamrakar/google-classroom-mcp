@@ -130,6 +130,21 @@ The server implements 12 high-agency tools conforming to `@modelcontextprotocol/
 
 ## 🔑 Authentication & Token Lifecycle
 
+### Course content copy tool
+
+`copy_course_contents` previews published topics, coursework, class materials, announcements, and Drive attachments before making changes. It defaults to `dryRun: true`. To apply a copy, set `dryRun: false`; the destination must be ACTIVE and have no enrolled students. The tool stores an idempotency/resume ledger at `%LOCALAPPDATA%/google-classroom-mcp/copy-ledger.json` (or the user's home directory where `LOCALAPPDATA` is unavailable). Drive requests support shared-drive files. Google Forms, Gemini Gems, and NotebookLM attachments are recreated as titled links because Classroom does not permit creating those special attachment types directly. Classroom rejects new coursework with past due dates: the default `pastDueDatePolicy: "skip"` leaves those assignments uncopied; `pastDueDatePolicy: "omit"` publishes them without an expired due date and lists that loss in the result.
+
+For example, extend the Classroom server's MCP `env` with the existing Drive MCP token and OAuth file paths:
+
+```json
+{
+  "DRIVE_CREDENTIALS_PATH": "C:\\Users\\<user>\\.gdrive-server-credentials.json",
+  "DRIVE_OAUTH_PATH": "C:\\Users\\<user>\\.gdrive-credentials.json"
+}
+```
+
+Drive credentials are deliberately separate from Classroom credentials. Configure `DRIVE_CREDENTIALS_PATH` and `DRIVE_OAUTH_PATH` to the existing Google Drive MCP token and OAuth client files. The Drive OAuth token needs permission to copy the source files and create files under the target folder. Classroom OAuth requires `classroom.coursework.students`, `classroom.announcements`, `classroom.courseworkmaterials`, and `classroom.topics`; rerun `npm run auth` and grant the updated access after changing these scopes. Rubric creation depends on Google account/course support and is reported as a per-item failure when unavailable.
+
 1. **Credentials**: Provide standard Google Cloud OAuth 2.0 Client credentials (Desktop Application).
 2. **Initial Authorisation (`npm run auth`)**:
    - Launches a local HTTP loopback server on port `58246`.
@@ -216,6 +231,9 @@ This repository follows the centralized ecosystem Git and secret governance stan
 
 # Safe pull only:
 .\sync.ps1 -PullOnly
+
+# Push the current clean feature branch to its matching origin branch:
+.\sync.bat -PushCurrentBranch
 ```
 
 ### Safety Features

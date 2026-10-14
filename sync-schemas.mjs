@@ -3,6 +3,21 @@ import path from "path";
 
 const tools = [
   {
+    name: "copy_course_contents",
+    description: "Copy published topics, coursework, class materials, announcements, and Drive attachments between courses. Dry-run defaults to true.",
+    parameters: {
+      type: "object",
+      properties: {
+        sourceCourseId: { type: "string", description: "Source course ID." },
+        destinationCourseId: { type: "string", description: "Destination course ID." },
+        driveFolderId: { type: "string", description: "Drive parent folder ID for copied attachments." },
+        dryRun: { type: "boolean", description: "Preview only (default true); set false to apply changes." },
+        pastDueDatePolicy: { type: "string", enum: ["skip", "omit"], description: "For coursework with past due dates, skip (default) or copy without the date." }
+      },
+      required: ["sourceCourseId", "destinationCourseId", "driveFolderId"]
+    }
+  },
+  {
     name: "list_courses",
     description: "List courses where the user is a student or teacher (e.g. active or archived classes).",
     parameters: {

@@ -22,6 +22,9 @@
 .PARAMETER PushOnly
     Pushes existing local commits without creating new commits.
 
+.PARAMETER PushCurrentBranch
+    Pushes the current clean, non-main branch to its same-named origin branch and sets its upstream.
+
 .PARAMETER NoPush
     Stages and commits changes locally without pushing to origin.
 
@@ -34,6 +37,7 @@
 .EXAMPLE
     .\sync.ps1                                   # Routine sync and push
     .\sync.ps1 -m "feat(classroom): add roster"   # Custom commit message
+    .\sync.bat -PushCurrentBranch                # Push current clean feature branch, never main
     .\sync.ps1 -SyncSchemas                      # Sync schemas and push changes
     .\sync.ps1 -WhatIf                           # Dry-run preview
 #>
@@ -45,6 +49,7 @@ param (
 
     [switch]$PullOnly,
     [switch]$PushOnly,
+    [switch]$PushCurrentBranch,
     [switch]$NoPush,
     [switch]$SyncSchemas,
     [switch]$WhatIf
@@ -190,6 +195,31 @@ if ($PushOnly) {
         git push origin main
         Write-Success "Push complete."
     }
+    exit 0
+}
+
+# 3a. Push the active feature branch without targeting origin/main.
+if ($PushCurrentBranch) {
+    $currentBranch = (git branch --show-current).Trim()
+    if (-not $currentBranch -or $currentBranch -eq "main") {
+        Write-Failure "PushCurrentBranch requires a checked-out branch other than main."
+        exit 1
+    }
+    if (git status --porcelain) {
+        Write-Failure "PushCurrentBranch requires a clean working tree. Commit or stash changes first."
+        exit 1
+    }
+    if ($WhatIf) {
+        Write-Notice "[WhatIf] Would execute: git push --set-upstream origin $currentBranch"
+        exit 0
+    }
+    Write-Status "Pushing current branch '$currentBranch' to its same-named origin branch..."
+    git push --set-upstream origin $currentBranch
+    if ($LASTEXITCODE -ne 0) {
+        Write-Failure "Feature branch push failed."
+        exit $LASTEXITCODE
+    }
+    Write-Success "Feature branch pushed to origin/$currentBranch."
     exit 0
 }
 
