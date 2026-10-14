@@ -109,7 +109,10 @@ export function createCourseCopier({ classroomFetch, driveFetch = globalThis.fet
       q: `'${driveFolderId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
       fields: "files(id,name,mimeType,parents)",
     }).catch((error) => ({ files: [], _error: error.message }));
-    for (const folder of folderResponse.files || []) folders.set(folder.name, folder.id);
+    for (const folder of folderResponse.files || []) {
+      const week = folder.name.match(/^\[?WK\s*0*(\d+)\]?$/i);
+      folders.set(week ? `[WK${Number(week[1])}]` : folder.name, folder.id);
+    }
     const plannedFiles = [...driveIds].map((id) => ({ sourceFileId: id, folder: targetFolderName(published, id, topics) }));
     if (dryRun) return {
       dryRun: true, sourceCourse: sourceCourse.name, destinationCourse: destCourse.name,
@@ -124,7 +127,8 @@ export function createCourseCopier({ classroomFetch, driveFetch = globalThis.fet
     async function ensureFolder(name) {
       if (name === "root") return driveFolderId;
       if (folders.has(name)) return folders.get(name);
-      const created = await drive("POST", "/files", { name, mimeType: "application/vnd.google-apps.folder", parents: [driveFolderId] });
+      const driveName = name.match(/^\[WK(\d+)\]$/i) ? name.slice(1, -1) : name;
+      const created = await drive("POST", "/files", { name: driveName, mimeType: "application/vnd.google-apps.folder", parents: [driveFolderId] });
       folders.set(name, created.id); state.folders[name] = created.id; checkpoint(); return created.id;
     }
     state.rubrics ||= {};

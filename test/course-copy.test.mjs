@@ -18,7 +18,7 @@ function setup(t, { failFile = false, permissionDenied = false, studentCount = 0
   fs.writeFileSync(oauthPath, JSON.stringify({ installed: { client_id: "id", client_secret: "secret" } }));
   process.env.DRIVE_CREDENTIALS_PATH = tokenPath;
   process.env.DRIVE_OAUTH_PATH = oauthPath;
-  const counts = { fileCopies: 0, postCreates: 0, topicCreates: 0 };
+  const counts = { fileCopies: 0, folderCreates: 0, postCreates: 0, topicCreates: 0 };
   const sourcePost = {
     id: "cw1", title: "Week 1: Lab", description: "Do it", state: "PUBLISHED", workType: "ASSIGNMENT",
     maxPoints: 10, dueDate: { year: 2026, month: 10, day: 20 }, topicId: "topic1",
@@ -44,14 +44,20 @@ function setup(t, { failFile = false, permissionDenied = false, studentCount = 0
   const driveFetch = async (url, options = {}) => {
     const parsed = new URL(url);
     const route = parsed.pathname.replace("/drive/v3", "");
-    if (route === "/files" && options.method !== "POST") return Response.json({ files: [] });
+    if (route === "/files" && options.method !== "POST") {
+      const query = parsed.searchParams.get("q") || "";
+      return Response.json({ files: query.includes("appProperties") ? [] : [
+        { id: "week1", name: "WK1", mimeType: "application/vnd.google-apps.folder" },
+        { id: "week2", name: "WK2", mimeType: "application/vnd.google-apps.folder" },
+      ] });
+    }
     if (route === "/files/file1") {
       if (permissionDenied) return Response.json({ error: { message: "insufficient permissions" } }, { status: 403 });
       if (failFile) return Response.json({ error: { message: "not found" } }, { status: 404 });
       return Response.json({ id: "file1", name: "lab.pdf" });
     }
     if (route === "/files/file1/copy") { counts.fileCopies++; return Response.json({ id: "copied-file" }); }
-    if (route === "/files" && options.method === "POST") return Response.json({ id: "week-folder" });
+    if (route === "/files" && options.method === "POST") { counts.folderCreates++; return Response.json({ id: "week-folder" }); }
     return Response.json({ files: [] });
   };
   t.after(() => {
@@ -68,6 +74,7 @@ test("dry run previews published counts and attachment destination without write
   assert.equal(result.dryRun, true);
   assert.equal(result.counts.coursework, 1);
   assert.equal(result.files[0].folder, "[WK1]");
+  assert.equal(result.files[0].destinationFolderId, "week1");
   assert.equal(counts.postCreates, 0);
   assert.equal(counts.fileCopies, 0);
 });
@@ -80,6 +87,7 @@ test("retry uses the local ledger and does not duplicate copied files or posts",
   assert.equal(counts.fileCopies, 1);
   assert.equal(counts.postCreates, 1);
   assert.equal(counts.topicCreates, 1);
+  assert.equal(counts.folderCreates, 0);
 });
 
 test("missing source attachment is reported and its post is not created", async (t) => {
